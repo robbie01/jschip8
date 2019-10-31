@@ -30,10 +30,28 @@ ctx.fillStyle = '#fff'
 var audioCtx = new AudioContext()
 var oscillator = null
 
-var cpuWorker = new Worker('worker/cpu.js')
+let cpuWorker = { postMessage: () => {}, terminate: () => {} }
 
-cpuWorker.onmessage = e => {
+const gfx = new Uint8Array(2048)
+let sharedBuf, sharedGfx
+
+requestAnimationFrame(function update() {
+    requestAnimationFrame(update)
+    ctx.clearRect(0, 0, 64*pixelSize, 32*pixelSize)
+    for (let i = 0; i < 64; ++i) {
+        for (let j = 0; j < 32; ++j) {
+            if (gfx[i + j * 64])
+                ctx.fillRect(i*pixelSize, j*pixelSize, pixelSize, pixelSize)
+        }
+    }
+})
+
+const workerOnMessage = e => {
     switch(e.data[0]) {
+        case 'buffer':
+            sharedBuf = e.data[1]
+            sharedGfx = new Uint8Array(sharedBuf)
+            break
         case 'play':
             if (!oscillator) {
                 oscillator = audioCtx.createOscillator()
@@ -45,18 +63,12 @@ cpuWorker.onmessage = e => {
         case 'stop':
             if (oscillator) {
                 oscillator.stop()
+                oscillator.disconnect()
                 oscillator = null
             }
             break
         case 'draw':
-            const gfx = new Uint8Array(e.data[1])
-            ctx.clearRect(0, 0, 64*pixelSize, 32*pixelSize)
-            for (let i = 0; i < 64; ++i) {
-                for (let j = 0; j < 32; ++j) {
-                    if (gfx[i + j * 64])
-                        ctx.fillRect(i*pixelSize, j*pixelSize, pixelSize, pixelSize)
-                }
-            }
+            gfx.set(sharedGfx)
             break
     }
 }
@@ -72,3 +84,12 @@ window.addEventListener("keyup", e => {
         cpuWorker.postMessage(["keyup", keyboard[e.code]])
     }
 })
+
+const f = document.getElementById('f')
+f.onsubmit = e => {
+    e.preventDefault()
+    cpuWorker.terminate()
+    cpuWorker = new Worker('worker/cpu.js')
+    cpuWorker.onmessage = workerOnMessage
+    cpuWorker.postMessage(["play", f.elements["filename"].value])
+}

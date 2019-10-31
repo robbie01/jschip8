@@ -17,10 +17,9 @@ const fontset = [
 	0xF0, 0x80, 0xF0, 0x80, 0x80		// F
 ]
 
-const frequency = 100
+const frequency = 500
 
-const keys = []
-for (let i = 0; i < 16; ++i) keys.push(false)
+const keys = new Array(16).fill(false)
 
 let delayTimer = 0
 let soundTimer = 0
@@ -31,23 +30,14 @@ const V = new Uint8Array(16)
 let I = 0
 const stack = new Uint16Array(16)
 let sp = 0
-const gfx = new Uint8Array(2048)
+const gfxBuffer = new SharedArrayBuffer(2048)
+const gfx = new Uint8Array(gfxBuffer)
 let pc = 0x200
 
-onmessage = e => {
-    switch(e.data[0]) {
-        case 'keydown':
-            keys[e.data[1]] = true
-            break
-        case 'keyup':
-            keys[e.data[1]] = false
-            break
-    }
-}
+postMessage(['buffer', gfxBuffer])
 
 const draw = () => {
-    const gfxCopy = gfx.buffer.slice(0)
-    postMessage(['draw', gfxCopy], [gfxCopy])
+    postMessage(['draw'])
 }
 
 const instructions = {
@@ -60,6 +50,8 @@ const instructions = {
             case 0xEE:
                 pc = stack[--sp]
                 break
+            default:
+                throw new Error("Unsupported instruction")
         }
         pc += 2
     },
@@ -109,7 +101,7 @@ const instructions = {
                 V[x] += V[y]
                 break
             case 0x5:
-                V[0xF] = V[x] > V[y] ? 1 : 0
+                V[0xF] = V[x] >= V[y] ? 1 : 0
                 V[x] -= V[y]
                 break
             case 0x6:
@@ -117,7 +109,7 @@ const instructions = {
                 V[x] >>= 1
                 break
             case 0x7:
-                V[0xF] = V[y] > V[x] ? 1 : 0
+                V[0xF] = V[y] >= V[x] ? 1 : 0
                 V[x] = V[y] - V[x]
                 break
             case 0xE:
@@ -136,7 +128,7 @@ const instructions = {
         pc += 2
     },
     0xB: instr => {
-        pc = instr & 0x0FFF + V[0x0]
+        pc = (instr & 0x0FFF) + V[0x0]
     },
     0xC: instr => {
         V[(instr & 0x0F00) >> 8] = (Math.random() * 256) & (instr & 0xFF)
@@ -150,8 +142,8 @@ const instructions = {
         for (let j = 0; j < n; ++j) {
             for (let i = 0; i < 8; ++i) {
                 if (memory[I+j] & (0x80 >> i)) {
-                    if (gfx[((x + i) % 64) + ((y + j) % 32) * 64]) V[0xF] = 1
-                    gfx[((x + i) % 64) + ((y + j) % 32) * 64] ^= memory[I+j] & (0x80 >> i)
+                    if (gfx[((V[x] + i) % 64) + ((V[y] + j) % 32) * 64]) V[0xF] = 1
+                    gfx[((V[x] + i) % 64) + ((V[y] + j) % 32) * 64] ^= memory[I+j] & (0x80 >> i)
                 }
             }
         }
@@ -169,6 +161,8 @@ const instructions = {
                 if (!keys[V[x]]) pc += 4
                 else pc += 2
                 break
+            default:
+                throw new Error("Unsupported instruction")
         }
     },
     0xF: instr => {
@@ -183,6 +177,7 @@ const instructions = {
                     if (keys[i]) {
                         V[x] = i
                         pc += 2
+                        break
                     }
                 }
                 break
@@ -203,8 +198,8 @@ const instructions = {
                 pc += 2
                 break
             case 0x33:
-                memory[I] = V[x]/100
-                memory[I+1] = V[x]/10%10
+                memory[I] = Math.floor(V[x]/100)
+                memory[I+1] = Math.floor(V[x]/10)%10
                 memory[I+2] = V[x]%10
                 pc += 2
                 break
@@ -224,13 +219,15 @@ const instructions = {
     }
 }
 
-fetch('/beep')
+let stop = () => {}
+
+const play = game => fetch(`/roms/${game}`)
     .then(r => r.arrayBuffer())
     .then(ab => {
         memory.set(new Uint8Array(ab), 0x200)
 
         const cpuInterval = setInterval(() => {
-            console.log('instruction', (memory[pc] << 8 | memory[pc+1]).toString(16).toUpperCase(), 'pc', pc.toString(16).toUpperCase())
+            //console.log('instruction', (memory[pc] << 8 | memory[pc+1]).toString(16).toUpperCase(), 'pc', pc.toString(16).toUpperCase())
             instructions[memory[pc] >> 4](memory[pc] << 8 | memory[pc+1])
         }, 1000/frequency)
 
@@ -250,3 +247,17 @@ fetch('/beep')
             }
         }, 1000/60)
     })
+
+onmessage = e => {
+    switch(e.data[0]) {
+        case 'keydown':
+            keys[e.data[1]] = true
+            break
+        case 'keyup':
+            keys[e.data[1]] = false
+            break
+        case 'play':
+            play(e.data[1])
+            break
+    }
+}
