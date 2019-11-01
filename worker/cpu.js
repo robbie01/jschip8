@@ -17,7 +17,7 @@ const fontset = [
 	0xF0, 0x80, 0xF0, 0x80, 0x80		// F
 ]
 
-const frequency = 500
+const frequency = 1000
 
 const keys = new Array(16).fill(false)
 
@@ -25,16 +25,38 @@ let delayTimer = 0
 let soundTimer = 0
 let audioPlaying = false
 const memory = new Uint8Array(4096)
+const mem = new DataView(memory.buffer)
 memory.set(fontset)
 const V = new Uint8Array(16)
 let I = 0
 const stack = new Uint16Array(16)
 let sp = 0
-const gfxBuffer = new SharedArrayBuffer(2048)
-const gfx = new Uint8Array(gfxBuffer)
+let width, height, gfxBuffer, gfx, extended
 let pc = 0x200
 
-postMessage(['buffer', gfxBuffer])
+const unsupport = instr => { throw new Error("Unsupported instruction " + ("0000" + instr.toString(16)).substr(-4).toUpperCase()) }
+
+let setupGraphics = mode => {
+    switch (mode) {
+        case 'standard':
+            width = 64
+            height = 32
+            extended = false
+            break
+        case 'extended':
+            width = 128
+            height = 64
+            extended = true
+            break
+        default:
+            throw new Error("Unsupported display mode")
+    }
+    gfxBuffer = new SharedArrayBuffer(width*height)
+    gfx = new Uint8Array(gfxBuffer)
+    postMessage(['buffer', mode, gfxBuffer])
+}
+
+setupGraphics('standard')
 
 const draw = () => {
     postMessage(['draw'])
@@ -42,6 +64,12 @@ const draw = () => {
 
 const instructions = {
     0x0: instr => {
+        if ((instr & 0x00F0) === 0xC0) {
+            let n = instr & 0x000F
+            gfx.set(gfx.map((e, i, a) => i - width * n > width * height ? 0 : a[i - width * n]))
+            pc += 2
+            return
+        }
         switch (instr) {
             case 0xE0:
                 gfx.fill(0)
@@ -50,8 +78,26 @@ const instructions = {
             case 0xEE:
                 pc = stack[--sp]
                 break
+            case 0xFB:
+                for (let i = 0; i < height; ++i) {
+                    let newRow = gfx.slice(i*height, (i+1)*height).map((e, i, a) => (i - 4 < 0) ? 0 : a[i-4])
+                    gfx.set(newRow, i*height)
+                }
+                break
+            case 0xFC:
+                for (let i = 0; i < height; ++i) {
+                    let newRow = gfx.slice(i*height, (i+1)*height).map((e, i, a) => (i + 4 >= width) ? 0 : a[i+4])
+                    gfx.set(newRow, i*height)
+                }
+                break
+            case 0xFE:
+                setupGraphics('standard')
+                break
+            case 0xFF:
+                setupGraphics('extended')
+                break
             default:
-                throw new Error("Unsupported instruction")
+                unsupport(instr)
         }
         pc += 2
     },
@@ -139,11 +185,22 @@ const instructions = {
         const y = (instr & 0x00F0) >> 4
         const n = instr & 0x000F
         V[0xF] = 0
+
+        if (extended && n === 0) {
+            for (let j = 0; j < 16; ++j) {
+                for (let i = 0; i < 16; ++i) {
+                    if (mem.getUint16(I+j*2, false) & (0x80 >> i)) {
+                        if (gfx[((V[x] + i) % width) + ((V[y] + j) % height) * width]) V[0xF] = 1
+                        gfx[((V[x] + i) % width) + ((V[y] + j) % height) * width] ^= mem.getUint16(I+j*2, false) & (0x80 >> i)
+                    }
+                }
+            }
+        }
         for (let j = 0; j < n; ++j) {
             for (let i = 0; i < 8; ++i) {
                 if (memory[I+j] & (0x80 >> i)) {
-                    if (gfx[((V[x] + i) % 64) + ((V[y] + j) % 32) * 64]) V[0xF] = 1
-                    gfx[((V[x] + i) % 64) + ((V[y] + j) % 32) * 64] ^= memory[I+j] & (0x80 >> i)
+                    if (gfx[((V[x] + i) % width) + ((V[y] + j) % height) * width]) V[0xF] = 1
+                    gfx[((V[x] + i) % width) + ((V[y] + j) % height) * width] ^= memory[I+j] & (0x80 >> i)
                 }
             }
         }
@@ -162,7 +219,7 @@ const instructions = {
                 else pc += 2
                 break
             default:
-                throw new Error("Unsupported instruction")
+                unsupport(instr)
         }
     },
     0xF: instr => {
@@ -215,6 +272,8 @@ const instructions = {
                 }
                 pc += 2
                 break
+            default:
+                unsupport(instr)
         }
     }
 }
@@ -227,8 +286,9 @@ const play = game => fetch(`/roms/${game}`)
         memory.set(new Uint8Array(ab), 0x200)
 
         const cpuInterval = setInterval(() => {
-            //console.log('instruction', (memory[pc] << 8 | memory[pc+1]).toString(16).toUpperCase(), 'pc', pc.toString(16).toUpperCase())
-            instructions[memory[pc] >> 4](memory[pc] << 8 | memory[pc+1])
+            //console.log('instruction', mem.getUint16(pc, false).toString(16).toUpperCase(), 'pc', pc.toString(16).toUpperCase())
+            const instr = mem.getUint16(pc, false)
+            instructions[instr >> 12](instr)
         }, 1000/frequency)
 
         const timerInterval = setInterval(() => {

@@ -17,11 +17,12 @@ const keyboard = {
     'KeyV': 0xF
 }
 
-const pixelSize = 8
+let pixelSize = 8
+let width = 64, height = 32
 
 var c = document.getElementById('c')
-c.width = 64 * pixelSize
-c.height = 32 * pixelSize
+c.width = width * pixelSize
+c.height = height * pixelSize
 c.style.backgroundColor = "#000"
 
 var ctx = c.getContext('2d')
@@ -32,15 +33,15 @@ var oscillator = null
 
 let cpuWorker = { postMessage: () => {}, terminate: () => {} }
 
-const gfx = new Uint8Array(2048)
-let sharedBuf, sharedGfx
+let gfx, sharedBuf, sharedGfx
 
 requestAnimationFrame(function update() {
     requestAnimationFrame(update)
-    ctx.clearRect(0, 0, 64*pixelSize, 32*pixelSize)
-    for (let i = 0; i < 64; ++i) {
-        for (let j = 0; j < 32; ++j) {
-            if (gfx[i + j * 64])
+    ctx.clearRect(0, 0, width*pixelSize, height*pixelSize)
+    if (!gfx) return
+    for (let i = 0; i < width; ++i) {
+        for (let j = 0; j < height; ++j) {
+            if (gfx[i + j * width])
                 ctx.fillRect(i*pixelSize, j*pixelSize, pixelSize, pixelSize)
         }
     }
@@ -49,7 +50,20 @@ requestAnimationFrame(function update() {
 const workerOnMessage = e => {
     switch(e.data[0]) {
         case 'buffer':
-            sharedBuf = e.data[1]
+            switch (e.data[1]) {
+                case 'standard':
+                    width = 64
+                    height = 32
+                    pixelSize = 8
+                    break
+                case 'extended':
+                    width = 128
+                    height = 64
+                    pixelSize = 4
+                    break
+            }
+            gfx = new Uint8Array(width*height)
+            sharedBuf = e.data[2]
             sharedGfx = new Uint8Array(sharedBuf)
             break
         case 'play':
