@@ -17,7 +17,9 @@ const fontset = [
 	0xF0, 0x80, 0xF0, 0x80, 0x80		// F
 ]
 
-const frequency = 1000
+const sfontset = [240,240,144,144,144,144,144,144,240,240,32,32,96,96,32,32,32,32,112,112,240,240,16,16,240,240,128,128,240,240,240,240,16,16,240,240,16,16,240,240,144,144,144,144,240,240,16,16,16,16,240,240,128,128,240,240,16,16,240,240,240,240,128,128,240,240,144,144,240,240,240,240,16,16,32,32,64,64,64,64,240,240,144,144,240,240,144,144,240,240,240,240,144,144,240,240,16,16,240,240]
+
+const frequency = 5000
 
 const keys = new Array(16).fill(false)
 
@@ -27,11 +29,15 @@ let audioPlaying = false
 const memory = new Uint8Array(4096)
 const mem = new DataView(memory.buffer)
 memory.set(fontset)
+memory.set(sfontset, 80)
 const V = new Uint8Array(16)
+const RPL = new Uint8Array(8)
 let I = 0
 const stack = new Uint16Array(16)
 let sp = 0
-let width, height, gfxBuffer, gfx, extended
+let width, height, extended
+let gfxBuffer = new SharedArrayBuffer(8192)
+let gfx = new Uint8Array(gfxBuffer)
 let pc = 0x200
 
 const unsupport = instr => { throw new Error("Unsupported instruction " + ("0000" + instr.toString(16)).substr(-4).toUpperCase()) }
@@ -51,8 +57,6 @@ let setupGraphics = mode => {
         default:
             throw new Error("Unsupported display mode")
     }
-    gfxBuffer = new SharedArrayBuffer(width*height)
-    gfx = new Uint8Array(gfxBuffer)
     postMessage(['buffer', mode, gfxBuffer])
 }
 
@@ -188,10 +192,11 @@ const instructions = {
 
         if (extended && n === 0) {
             for (let j = 0; j < 16; ++j) {
+                let p = mem.getUint16(I+j*2, false)
                 for (let i = 0; i < 16; ++i) {
-                    if (mem.getUint16(I+j*2, false) & (0x80 >> i)) {
+                    if (p & (0x8000 >> i)) {
                         if (gfx[((V[x] + i) % width) + ((V[y] + j) % height) * width]) V[0xF] = 1
-                        gfx[((V[x] + i) % width) + ((V[y] + j) % height) * width] ^= mem.getUint16(I+j*2, false) & (0x80 >> i)
+                        gfx[((V[x] + i) % width) + ((V[y] + j) % height) * width] ^= p & (0x8000 >> i)
                     }
                 }
             }
@@ -254,6 +259,10 @@ const instructions = {
                 I = V[x] * 5
                 pc += 2
                 break
+            case 0x30:
+                I = V[x] * 10 + 80
+                pc += 2
+                break
             case 0x33:
                 memory[I] = Math.floor(V[x]/100)
                 memory[I+1] = Math.floor(V[x]/10)%10
@@ -261,15 +270,19 @@ const instructions = {
                 pc += 2
                 break
             case 0x55:
-                for (let i = 0; i <= x; ++i) {
-                    memory[I+i] = V[i]
-                }
+                memory.set(V.slice(0, x+1), I)
                 pc += 2
                 break
             case 0x65:
-                for (let i = 0; i <= x; ++i) {
-                    V[i] = memory[I+i]
-                }
+                V.set(memory.slice(I, x+1))
+                pc += 2
+                break
+            case 0x75:
+                RPL.set(V.slice(0, x+1))
+                pc += 2
+                break
+            case 0x85:
+                V.set(RPL.slice(0, x+1))
                 pc += 2
                 break
             default:
@@ -281,7 +294,7 @@ const instructions = {
 let stop = () => {}
 
 const play = game => fetch(`/roms/${game}`)
-    .then(r => r.arrayBuffer())
+    .then(r => r.ok ? r.arrayBuffer() : Promise.reject(r.responseText))
     .then(ab => {
         memory.set(new Uint8Array(ab), 0x200)
 

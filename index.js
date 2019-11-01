@@ -33,7 +33,8 @@ var oscillator = null
 
 let cpuWorker = { postMessage: () => {}, terminate: () => {} }
 
-let gfx, sharedBuf, sharedGfx
+let gfx = new Uint8Array(8192)
+let sharedBuf, sharedGfx
 
 requestAnimationFrame(function update() {
     requestAnimationFrame(update)
@@ -62,7 +63,6 @@ const workerOnMessage = e => {
                     pixelSize = 4
                     break
             }
-            gfx = new Uint8Array(width*height)
             sharedBuf = e.data[2]
             sharedGfx = new Uint8Array(sharedBuf)
             break
